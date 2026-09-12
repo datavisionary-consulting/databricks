@@ -10,18 +10,35 @@
 # MAGIC    Catalog page: https://datacatalog.worldbank.org/search/dataset/0037580/global-shipping-traffic-density
 # MAGIC 2. **NGA World Port Index** — ~3,700 ports worldwide with name, country, and coordinates,
 # MAGIC    used to label whatever chokepoints the density data turns up.
-# MAGIC    Catalog page: https://msi.nga.mil/Publications/WPI (a CSV mirror also exists on
-# MAGIC    data.humdata.org and hub.arcgis.com if the NGA site is slow)
+# MAGIC    Source used: https://hub.arcgis.com/datasets/EDT::world-port-index (CSV export)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 0 — create the schema and volume
 # MAGIC
-# MAGIC **Action needed before running the next cell:** open the World Bank catalog page above,
-# MAGIC find the download link for the "Global Ship Density - Commercial Ships" GeoTIFF
-# MAGIC (~458 MB), and paste it into the `wget` command below in place of `PASTE_URL_HERE`.
-# MAGIC Catalog download links carry a token and can't be hardcoded reliably.
+# MAGIC `/Volumes/workspace/global_shipping/raw_data` only becomes a valid path once the
+# MAGIC `global_shipping` schema and its `raw_data` volume exist in Unity Catalog. Run this once.
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE SCHEMA IF NOT EXISTS workspace.global_shipping;
+# MAGIC CREATE VOLUME IF NOT EXISTS workspace.global_shipping.raw_data;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Step 1 — download the shipping density raster
+# MAGIC
+# MAGIC **Action needed:** open the World Bank catalog page above, find the download link for
+# MAGIC the "Global Ship Density - Commercial Ships" GeoTIFF (~458 MB), and paste it into the
+# MAGIC `wget` command below in place of `PASTE_URL_HERE`. Catalog download links carry a token
+# MAGIC and can't be hardcoded reliably.
 
 # COMMAND ----------
 
 # MAGIC %sh
-# MAGIC mkdir -p /Volumes/workspace/global_shipping/raw_data
 # MAGIC cd /Volumes/workspace/global_shipping/raw_data
 # MAGIC wget -O ShipDensity_Commercial1.tif "PASTE_URL_HERE"
 # MAGIC ls -lh
@@ -92,23 +109,26 @@ display(sdf.orderBy(sdf.traffic_density.desc()).limit(20))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Load the World Port Index
+# MAGIC ## Step 2 — load the World Port Index
 # MAGIC
-# MAGIC **Action needed:** download the CSV from the NGA page (or the HDX/ArcGIS mirror) and
-# MAGIC paste its URL below, same as the raster step.
+# MAGIC The ArcGIS Hub CSV download button doesn't give a stable, copyable URL — it just
+# MAGIC downloads straight to your computer. So upload the file by hand instead of `wget`:
+# MAGIC
+# MAGIC 1. In the left sidebar, go to **Catalog**.
+# MAGIC 2. Navigate to **workspace → global_shipping → raw_data** (the volume created in Step 0).
+# MAGIC 3. Click **Upload to this volume**, and select the CSV file you already downloaded
+# MAGIC    from ArcGIS Hub (check your Downloads folder — something like `World_Port_Index.csv`).
+# MAGIC 4. Once it finishes uploading, run the cell below. If the uploaded filename is
+# MAGIC    different from `world_port_index.csv`, update `PORT_CSV_PATH` to match.
 
 # COMMAND ----------
 
-# MAGIC %sh
-# MAGIC wget -O /Volumes/workspace/global_shipping/raw_data/world_port_index.csv "PASTE_URL_HERE"
-# MAGIC ls -lh /Volumes/workspace/global_shipping/raw_data/
-
-# COMMAND ----------
+PORT_CSV_PATH = "/Volumes/workspace/global_shipping/raw_data/world_port_index.csv"
 
 ports = (
     spark.read.option("header", True)
     .option("inferSchema", True)
-    .csv("/Volumes/workspace/global_shipping/raw_data/world_port_index.csv")
+    .csv(PORT_CSV_PATH)
 )
 print(f"{ports.count():,} ports loaded")
 ports.write.format("delta").mode("overwrite").saveAsTable("workspace.global_shipping.world_port_index")

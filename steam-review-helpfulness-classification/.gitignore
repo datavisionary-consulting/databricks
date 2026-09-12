@@ -1,0 +1,5 @@
+# Raw Steam reviews data (~500MB compressed, ~2-3GB decompressed) lives in
+# Databricks DBFS only -- never committed here. See download.py.
+*.csv
+*.csv.bz2
+data/

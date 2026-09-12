@@ -1,0 +1,30 @@
+{
+  "n_reviews": 6417106,
+  "class_balance": {
+    "not_helpful": 5472222,
+    "helpful": 944884
+  },
+  "auc": {
+    "baseline": 0.5783,
+    "tfidf": 0.6572,
+    "tuned": 0.6576,
+    "scaled": 0.6576
+  },
+  "best_hyperparams": {
+    "regParam": 0.01,
+    "elasticNetParam": 0.0
+  },
+  "confusion_matrix": {
+    "tn": 1092278,
+    "fp": 2919,
+    "fn": 186966,
+    "tp": 2325
+  },
+  "coefficients": {
+    "recommended": -0.2492,
+    "review_length": 0.0097,
+    "word_count": -0.0024,
+    "has_exclaim": -0.0336,
+    "has_question": 0.0577
+  }
+}

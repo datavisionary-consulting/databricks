@@ -51,7 +51,9 @@ The strongest single structured effect is `recommended` (standardized coefficien
 
 ## Files
 
-- `download.py` — the real Databricks notebook cells used to pull the 6.4M-row dataset directly into a lakehouse Delta table (`workspace.steam_reviews.reviews_raw`). Not runnable locally by design — this is a lakehouse-scale pipeline, not a laptop script.
+- `Notebook/01_download_and_load.ipynb` — the actual Databricks notebook that pulls the 6.4M-row dataset from Zenodo and persists it as the `workspace.steam_reviews.reviews_raw` Delta table.
+- `Notebook/02_eda_and_features.ipynb` — the actual Databricks notebook covering EDA, the regression→classification pivot, the baseline model, TF-IDF features, `CrossValidator` tuning, the interpretability pass, and the `results.json` export. This is the full modeling pipeline behind every number above.
+- `download.py` — a plain-Python mirror of the download notebook's cells, kept for readability outside Databricks. Not runnable locally by design — this is a lakehouse-scale pipeline, not a laptop script.
 - `results.json` — every numeric result referenced above, exported from the actual PySpark pipeline.
 - `analysis.py` — re-renders `results.json` into the figures below (`pip install matplotlib numpy && python analysis.py`). Does not recompute the model — the 500MB raw dataset and 6.4M-row table intentionally never leave Databricks (see `.gitignore`).
 - `figures/` — all charts, including the ones used on [datavisionary-consulting.github.io](https://datavisionary-consulting.github.io/#solutions).

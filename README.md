@@ -1,6 +1,12 @@
 # Steam Review Helpfulness Classification
 
-Predicting whether a Steam review will be marked "helpful" — the same review-ranking problem platforms like Steam and Amazon solve to decide which reviews surface first. Built end-to-end on real data at lakehouse scale (PySpark on Databricks), including a mid-project pivot when the data itself contradicted the original plan.
+Predicting whether a Steam review will be marked "helpful" — the same review-ranking problem platforms like Steam and Amazon solve to decide which reviews surface first, and a stand-in for any triage problem where there's more customer feedback than staff to read it. Built end-to-end on real data at lakehouse scale (PySpark on Databricks), including a mid-project pivot when the data itself contradicted the original plan.
+
+## The real finding
+
+The AUC numbers below matter less than this: a hard automatic yes/no cutoff is the wrong tool for triage. At the default 0.5 threshold, the model flags just **5,244 of 1,284,488 test reviews (0.4%)** as helpful, and still misses **98.8%** of the reviews that actually are. That's not a modeling failure — it's proof the output has to be a *ranked queue*, not a gate: work the highest-scoring reviews first, instead of asking one cutoff to decide alone.
+
+A ranked queue still isn't the full answer. This model was trained on review text and vote counts — it has no way to know a reviewer is a VIP account whose complaint could become a legal dispute, or that the same user has filed the same complaint five times before. Those cases carry a cost the model was never trained to weigh, so they can't wait their turn in a probability-ranked queue. A real deployment needs a hard rule sitting *above* the model: known high-risk accounts and repeat complainants escalate straight to a human, before the score is even consulted; everything else is worked top-down by predicted probability; only the reviews the model is confident add no value get left fully automatic. No dataset — Steam's included — has a "this becomes a lawsuit" label to train against, so that rule can't come from the model. It has to come from the people who've handled these cases before.
 
 ## Headline result
 

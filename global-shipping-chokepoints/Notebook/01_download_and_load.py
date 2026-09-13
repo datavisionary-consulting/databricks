@@ -1,17 +1,22 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # MAGIC %md
 # MAGIC # Global Shipping Chokepoints — 01: Download and Load
 # MAGIC
 # MAGIC Downloads two real, free, global datasets and loads them into Delta tables:
 # MAGIC
 # MAGIC 1. **World Bank Global Shipping Traffic Density** — a worldwide grid built from real
-# MAGIC    AIS ship positions (Jan 2015 - Feb 2021), ~500m resolution at the equator, all vessel
+# MAGIC    AIS ship positions (Jan 2015 - Feb 2021), about 500m resolution at the equator, all vessel
 # MAGIC    types combined (commercial, fishing, passenger, oil & gas, leisure). This is the real
 # MAGIC    "did a ship actually pass through here" data.
 # MAGIC    Catalog page: https://datacatalog.worldbank.org/search/dataset/0037580/global-shipping-traffic-density
-# MAGIC 2. **NGA World Port Index** — ~3,700 ports worldwide with name, country, and coordinates,
+# MAGIC 2. **NGA World Port Index** — about 3,700 ports worldwide with name, country, and coordinates,
 # MAGIC    used to label whatever chokepoints the density data turns up.
 # MAGIC    Source used: https://hub.arcgis.com/datasets/EDT::world-port-index (CSV export)
+# MAGIC
 
 # COMMAND ----------
 
@@ -70,14 +75,15 @@ with rasterio.open(RASTER_PATH) as src:
 # MAGIC %md
 # MAGIC ## Downsample to a Spark-friendly grid
 # MAGIC
-# MAGIC The native grid is far too fine (billions of cells at ~500m resolution, mostly zero —
+# MAGIC The native grid is far too fine (billions of cells at about 500m resolution, mostly zero —
 # MAGIC land, or open ocean nobody crosses) to reason about globally, and the uncompressed file
 # MAGIC is 9.2 GB. Instead of reading every native pixel in Python, we ask GDAL (via rasterio)
-# MAGIC to decimate directly to a 0.05-degree grid (~5.5 km at the equator) using `Resampling.sum`
+# MAGIC to decimate directly to a 0.05-degree grid (about 5.5 km at the equator) using `Resampling.sum`
 # MAGIC — it adds up the native cells inside each new, coarser cell, which is the correct way to
 # MAGIC combine a *count/density* layer (unlike `average`, which would understate how much
 # MAGIC traffic passes through a busy coarse cell). GDAL does this fast using the overview
 # MAGIC pyramid already built into the file. Only non-zero cells are kept afterward.
+# MAGIC
 
 # COMMAND ----------
 
@@ -91,13 +97,21 @@ BLOCK = 10  # 10 native pixels/side -> ~0.05-degree cells if native res is ~0.00
 with rasterio.open(RASTER_PATH) as src:
     out_height = src.height // BLOCK
     out_width = src.width // BLOCK
-    data = src.read(1, out_shape=(out_height, out_width), resampling=Resampling.sum)
+    # Resampling.sum only works for warp operations, not plain reads. Every block here is
+    # exactly BLOCK x BLOCK, so average * (BLOCK*BLOCK) gives the same result as a true sum,
+    # without needing the warp API. Reading as float64 avoids premature rounding.
+    data = src.read(1, out_shape=(out_height, out_width), resampling=Resampling.average, out_dtype="float64")
+    data = data * (BLOCK * BLOCK)
     out_transform = src.transform * Affine.scale(src.width / out_width, src.height / out_height)
 
 nz_rows, nz_cols = np.nonzero(data)
 lons, lats = rasterio.transform.xy(out_transform, nz_rows, nz_cols)
 
-pdf = pd.DataFrame({"lat": lats, "lon": lons, "traffic_density": data[nz_rows, nz_cols].astype("int64")})
+pdf = pd.DataFrame({
+    "lat": lats,
+    "lon": lons,
+    "traffic_density": np.round(data[nz_rows, nz_cols]).astype("int64"),
+})
 print(f"{len(pdf):,} non-zero 0.05-degree cells kept (out of ~{out_height * out_width:,} possible globally)")
 
 sdf = spark.createDataFrame(pdf)
@@ -121,7 +135,13 @@ display(sdf.orderBy(sdf.traffic_density.desc()).limit(20))
 
 # COMMAND ----------
 
-PORT_CSV_PATH = "/Volumes/workspace/global_shipping/raw_data/world_port_index.csv"
+# MAGIC %sh
+# MAGIC ls -la /Volumes/workspace/global_shipping/raw_data/
+# MAGIC
+
+# COMMAND ----------
+
+PORT_CSV_PATH = "/Volumes/workspace/global_shipping/raw_data/World_Port_Index.csv"
 
 ports = (
     spark.read.option("header", True)

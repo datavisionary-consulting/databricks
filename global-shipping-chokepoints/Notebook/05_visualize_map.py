@@ -42,11 +42,15 @@ chokepoints = spark.table("workspace.global_shipping.chokepoints_final_compariso
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Option A: density heatmap + chokepoint markers on a real basemap
+# MAGIC ## Option A: density heatmap + chokepoint markers on a "normal map" basemap
 # MAGIC
 # MAGIC `Densitymap` / `Scattermap` (no "box" in the name) are the newer, tokenless,
-# MAGIC MapLibre-based versions -- `map_style="carto-darkmatter"` / `"carto-positron"` are
-# MAGIC free, no Mapbox account or card needed anywhere in this notebook.
+# MAGIC MapLibre-based versions. `map_style="carto-voyager"` is CARTO's free, no-account
+# MAGIC basemap designed to look like an ordinary consumer map (real land/water colors, roads,
+# MAGIC city labels) rather than the moody, minimal "darkmatter" style. Satellite imagery isn't
+# MAGIC included here on purpose -- every real satellite basemap provider (Google, Mapbox,
+# MAGIC Esri) requires a paid account beyond a small free quota, which is exactly what we're
+# MAGIC avoiding.
 
 # COMMAND ----------
 
@@ -66,7 +70,7 @@ fig.add_trace(go.Scattermap(
     ),
     text=chokepoints["chokepoint"],
     textposition="top center",
-    textfont=dict(color="white", size=12),
+    textfont=dict(color="black", size=12),
     hovertext=[
         f"{row.chokepoint}<br>Density share: {row.share_of_ranked_total:.1%}<br>Capacity share (IMF): {row.capacity_share:.1%}"
         for row in chokepoints.itertuples()
@@ -75,7 +79,7 @@ fig.add_trace(go.Scattermap(
 ))
 
 fig.update_layout(
-    map_style="carto-darkmatter",  # free, no token needed
+    map_style="carto-voyager",  # free, no token needed -- looks like an ordinary Google-Maps-style map
     map_zoom=1, map_center={"lat": 20, "lon": 20},
     margin=dict(l=0, r=0, t=40, b=0),
     height=650,
@@ -87,7 +91,11 @@ fig.show()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Option B: same data, a lighter basemap (better if the dark version prints too dark)
+# MAGIC ## Option B: same data, the clean "BI dashboard" basemap
+# MAGIC
+# MAGIC `carto-positron` is a light, minimal, no-clutter style -- the same family of basemap
+# MAGIC Tableau and Power BI tend to default to, if voyager's colors feel too busy for a
+# MAGIC printed figure.
 
 # COMMAND ----------
 
@@ -113,5 +121,5 @@ fig3 = px.scatter_map(
     zoom=1, height=600,
     title="The 9 chokepoints, sized and colored by real cargo capacity share",
 )
-fig3.update_layout(map_style="carto-darkmatter", margin=dict(l=0, r=0, t=40, b=0))
+fig3.update_layout(map_style="carto-voyager", margin=dict(l=0, r=0, t=40, b=0))
 fig3.show()

@@ -2,14 +2,18 @@
 
 **Interactive map:** https://claude.ai/code/artifact/ac3a0fa7-574b-47af-9d3f-261c8215e0ee
 
-## The real finding
+## Goal
 
-The world's busiest waterway by raw ship traffic barely moves any cargo. The Danish Straits (the gateway to the Baltic Sea) account for **69.5%** of the measured AIS traffic density across 9 major global chokepoints — more than the other eight combined — but only **0.46%** of their real, measured cargo-carrying capacity (IMF PortWatch). The Strait of Malacca, by contrast, carries **39.3%** of the group's real capacity while registering only 14.0% of the traffic density.
+A global view of the world's shipping traffic and its major chokepoints, built at lakehouse scale in Databricks, using real, independently sourced data rather than a single dashboard's own numbers.
 
-| Chokepoint | Nearest port | AIS density share | Real capacity share (IMF) |
+## The measurements
+
+Two real, independent datasets measure the same 9 major global shipping chokepoints: the Strait of Malacca, Suez Canal, Panama Canal, Strait of Hormuz, Bab-el-Mandeb, the Danish Straits, Strait of Dover, Strait of Gibraltar, and Bosphorus Strait.
+
+| Chokepoint | Nearest port | AIS traffic density share | Real capacity share (IMF) |
 |---|---|---:|---:|
-| Danish Straits | Hundested, DK | **69.5%** | 0.5% |
-| Strait of Malacca | Teluk Anson, MY | 14.0% | **39.3%** |
+| Danish Straits | Hundested, DK | 69.5% | 0.5% |
+| Strait of Malacca | Teluk Anson, MY | 14.0% | 39.3% |
 | Strait of Hormuz | Khawr Khasab, OM | 6.4% | 6.8% |
 | Strait of Dover | Calais, FR | 5.1% | 15.7% |
 | Strait of Gibraltar | Tangier-Mediterranean, MA | 1.7% | 16.0% |
@@ -18,7 +22,9 @@ The world's busiest waterway by raw ship traffic barely moves any cargo. The Dan
 | Bosphorus Strait | Istinye, TR | 0.8% | 5.0% |
 | Panama Canal | Vacamonte, PA | 0.08% | 4.2% |
 
-**Why:** raw AIS position density measures *how often a ship passed*, not *how much it was carrying*. The Danish Straits see constant short-haul ferry and regional traffic spread across a wide lane — every trip pings the grid repeatedly. Panama and Suez are the opposite: narrow, engineered canals where ships travel single-file through a tight corridor, touching far fewer grid cells per transit even when each vessel is near-maximum capacity. **A chokepoint's importance to trade has to be measured in what ships are carrying, not how often their GPS pinged** — which is why this project cross-checks its own measurement against an independent, authoritative source (IMF PortWatch) rather than reporting the density ranking alone, the same honest-cross-check pattern used across this repo's other projects.
+By traffic density (how often a ship's position was recorded in the area), the Danish Straits rank first. By real cargo-carrying capacity (IMF PortWatch, measured independently from the density data), the Strait of Malacca ranks first.
+
+**Why the two rankings differ:** traffic density counts vessel position reports; cargo capacity measures the freight-carrying capacity of the vessels making those reports. A narrow, engineered canal (Panama, Suez) routes ships single-file through one corridor, producing fewer distinct position reports per transit than a wide strait carrying a comparable or smaller amount of cargo. A wide strait with frequent short-distance regional traffic (the Danish Straits) produces many position reports from vessels that individually carry comparatively little cargo.
 
 ## Data (real, free, global, all independently verified)
 
@@ -29,16 +35,18 @@ The world's busiest waterway by raw ship traffic barely moves any cargo. The Dan
 ## Method
 
 1. **`01_download_and_load`** — downloads the World Bank raster (a 511MB zip containing a 9.2GB GeoTIFF) and the World Port Index CSV, decimates the raster from its native ~500m grid to a 0.05° grid using GDAL's overview-aware decimated read (`Resampling.average`, scaled to recover an equivalent sum — `Resampling.sum` is warp-only in rasterio, not usable on a plain read), and lands both as Delta tables. 3,040,763 non-zero 0.05° cells survive out of ~24.5M possible globally.
-2. **`02_find_chokepoints`** — defines 9 known strategic chokepoints by real geographic bounding box (Malacca, Suez, Panama, Hormuz, Bab-el-Mandeb, the Danish Straits, Dover, Gibraltar, Bosphorus), sums real measured traffic density inside each box, and labels each with its nearest real port from the World Port Index.
+2. **`02_find_chokepoints`** — defines the 9 chokepoints by real geographic bounding box, sums real measured traffic density inside each box, and labels each with its nearest real port from the World Port Index.
 3. **`03_trade_capacity_crosscheck`** — pulls a trailing 365-day average of real daily vessel capacity from IMF PortWatch for the same 9 chokepoints (mapped to PortWatch's own canonical chokepoint IDs) and joins it against the density ranking from step 2. This produces the table above.
-4. **`04_export_for_map`** — re-aggregates the native 3M-row grid to a 0.5° grid for visualization, keeps the top half by density to bound the payload, and exports both that grid and the final comparison table as compact JSON for the interactive map.
+4. **`04_export_for_map`** — re-aggregates the native 3M-row grid to a 0.5° grid for visualization, keeps the top half by density to bound the payload, and exports both that grid and the final comparison table as compact JSON.
+5. **`05_visualize_map`** — renders the same data with a real basemap (Plotly's tokenless MapLibre traces, no Mapbox account needed) directly inside Databricks, producing the map figure used on the site and in this README.
 
 ## Files
 
-- `Notebook/01_download_and_load.py`, `Notebook/02_find_chokepoints.py`, `Notebook/03_trade_capacity_crosscheck.py`, `Notebook/04_export_for_map.py` — the actual Databricks notebooks, in run order.
+- `Notebook/01_download_and_load.ipynb` through `Notebook/05_visualize_map.ipynb` — the actual Databricks notebooks, in run order, with real outputs included.
+- `figures/world_map.png`, `figures/density_vs_capacity.png` — the two figures used on [datavisionary-consulting.github.io](https://datavisionary-consulting.github.io/#solutions).
 
-## Honest limits
+## Notes on the method
 
-- The World Bank raster download actually serves the **all-vessel-types combined** density layer (fishing, passenger, oil & gas, leisure, commercial), not a commercial-only layer, even though the catalog page also lists one separately. The major commercial chokepoints dominate regardless, but this is noted rather than silently assumed away.
-- Bounding-box aggregation conflates channel geometry with traffic volume: a narrow engineered canal (Panama, Suez) touches far fewer 0.05° cells per transit than a wide strait (Malacca, the Danish Straits) even at equal vessel counts, which is itself part of why the IMF capacity cross-check exists rather than trusting the density box sums alone.
+- The World Bank raster download actually serves the **all-vessel-types combined** density layer (fishing, passenger, oil & gas, leisure, commercial), not a commercial-only layer, even though the catalog page also lists one separately.
+- Bounding-box aggregation conflates channel geometry with traffic volume: a narrow engineered canal (Panama, Suez) touches far fewer 0.05° cells per transit than a wide strait (Malacca, the Danish Straits) even at an equal vessel count.
 - "Danish Straits" is a broader box than PortWatch's own more specific "Oresund Strait" — the two aren't an identical footprint, which is why the mapping is documented explicitly in `03_trade_capacity_crosscheck` rather than treated as interchangeable.

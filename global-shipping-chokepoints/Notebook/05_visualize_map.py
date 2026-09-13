@@ -4,14 +4,16 @@
 # MAGIC
 # MAGIC The hand-drawn SVG map used for the web version doesn't read as a "real" map --
 # MAGIC no coastline detail, no place labels, no basemap. This notebook renders the same real
-# MAGIC data with an actual basemap (streets/labels via free, tokenless map tiles) using Plotly,
-# MAGIC which `display()` in Databricks renders natively. Take a screenshot of whichever cell's
-# MAGIC output looks best, or use the "Download as PNG" option in Plotly's own toolbar
-# MAGIC (top-right of the chart) to export a static image straight from Databricks.
+# MAGIC data with an actual basemap (streets/labels via free, tokenless map tiles) using Plotly's
+# MAGIC newer MapLibre-based traces (`Scattermap` / `Densitymap`, not the older `*mapbox`
+# MAGIC versions) -- no Mapbox account, no card, no token needed for any of this. `display()`
+# MAGIC in Databricks renders the result natively. Take a screenshot of whichever cell's output
+# MAGIC looks best, or use the "Download as PNG" option in Plotly's own toolbar (top-right of
+# MAGIC the chart) to export a static image straight from Databricks.
 
 # COMMAND ----------
 
-# MAGIC %pip install plotly
+# MAGIC %pip install --upgrade plotly
 # MAGIC dbutils.library.restartPython()
 
 # COMMAND ----------
@@ -41,17 +43,21 @@ chokepoints = spark.table("workspace.global_shipping.chokepoints_final_compariso
 
 # MAGIC %md
 # MAGIC ## Option A: density heatmap + chokepoint markers on a real basemap
+# MAGIC
+# MAGIC `Densitymap` / `Scattermap` (no "box" in the name) are the newer, tokenless,
+# MAGIC MapLibre-based versions -- `map_style="carto-darkmatter"` / `"carto-positron"` are
+# MAGIC free, no Mapbox account or card needed anywhere in this notebook.
 
 # COMMAND ----------
 
 fig = go.Figure()
 
-fig.add_trace(go.Densitymapbox(
+fig.add_trace(go.Densitymap(
     lat=plot_grid["grid_lat"], lon=plot_grid["grid_lon"], z=plot_grid["traffic_density"],
     radius=10, colorscale="Teal", showscale=False, opacity=0.75,
 ))
 
-fig.add_trace(go.Scattermapbox(
+fig.add_trace(go.Scattermap(
     lat=chokepoints["center_lat"], lon=chokepoints["center_lon"],
     mode="markers+text",
     marker=dict(
@@ -69,8 +75,8 @@ fig.add_trace(go.Scattermapbox(
 ))
 
 fig.update_layout(
-    mapbox_style="carto-darkmatter",  # free, no token needed
-    mapbox_zoom=1, mapbox_center={"lat": 20, "lon": 20},
+    map_style="carto-darkmatter",  # free, no token needed
+    map_zoom=1, map_center={"lat": 20, "lon": 20},
     margin=dict(l=0, r=0, t=40, b=0),
     height=650,
     title="Real AIS traffic density vs. real chokepoint capacity (brass markers, sized by IMF capacity share)",
@@ -86,7 +92,7 @@ fig.show()
 # COMMAND ----------
 
 fig2 = go.Figure(fig)
-fig2.update_layout(mapbox_style="carto-positron")
+fig2.update_layout(map_style="carto-positron")
 fig2.show()
 
 # COMMAND ----------
@@ -98,7 +104,7 @@ fig2.show()
 
 # COMMAND ----------
 
-fig3 = px.scatter_mapbox(
+fig3 = px.scatter_map(
     chokepoints, lat="center_lat", lon="center_lon",
     size="avg_daily_capacity", color="capacity_share",
     color_continuous_scale="Oranges",
@@ -107,5 +113,5 @@ fig3 = px.scatter_mapbox(
     zoom=1, height=600,
     title="The 9 chokepoints, sized and colored by real cargo capacity share",
 )
-fig3.update_layout(mapbox_style="carto-darkmatter", margin=dict(l=0, r=0, t=40, b=0))
+fig3.update_layout(map_style="carto-darkmatter", margin=dict(l=0, r=0, t=40, b=0))
 fig3.show()

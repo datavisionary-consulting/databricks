@@ -14,13 +14,16 @@ Verified directly against the live API, not assumed from CKAN documentation:
 2. **`package_show` returns `result` as a list containing one dataset**, not a bare object (`{"result": [{...}]}`). Treating it like standard CKAN's `{"result": {...}}` silently breaks on every call.
 3. **There is no `organization` field.** The publishing entity lives at `groups[0]['title']`, with `maintainer` as a fallback when a dataset has no group.
 
+A fourth thing showed up on the first real run rather than in isolated tests: a sustained pass at 10 concurrent workers over ~4,714 calls outlasts whatever rate-limiting the portal applies, and a batch of otherwise-normal slugs (plain ASCII, nothing exotic) starts failing after several minutes even though each one works fine on its own. Nothing is lost — failures are checkpointed, not dropped — see the retry step below.
+
 ## Method
 
 1. `fetch_catalog()` — one call to `package_list`, returns every dataset slug (~4,714).
-2. `enrich_metadata()` — `package_show` for every slug, up to 10 concurrent requests, 3 retries with exponential backoff per slug, checkpointed to a `.jsonl` file every 200 records so an interrupted run resumes instead of restarting. Failed slugs (after retries) are logged separately, not silently dropped.
-3. Metadata lands as `workspace.pnda_catalog.bronze_pnda_catalogo` (slug, titulo, descripcion, entidad, n_recursos, formatos, urls, plus timestamps and the `private` flag).
-4. `sample_resource()` — reads the first 200 rows of a CSV resource via a genuine partial HTTP read (`pandas.read_csv(url, nrows=...)`). XLSX has no partial-read equivalent for a remote URL, so it's size-capped (25MB) via a `HEAD` request first, then truncated to 200 rows after loading. Anything else (PDF, nested JSON, etc.) is logged and skipped, never raises.
-5. `build_report()` — datasets by entity (top 20), datasets by format, and how many datasets have zero downloadable resources at all.
+2. `enrich_metadata()` — `package_show` for every slug, up to 10 concurrent requests, 3 retries with exponential backoff per slug, checkpointed to a `.jsonl` file every 200 records so an interrupted run resumes instead of restarting. Failed slugs (after retries) are logged to `failed_slugs.jsonl`, not silently dropped.
+3. `retry_failed_slugs()` — after the main pass, reads `failed_slugs.jsonl`, pauses briefly for the server to recover, and retries just those slugs with a deliberately gentler configuration (3 workers instead of 10, longer backoff, 5 attempts instead of 3). Safe to re-run.
+4. Metadata lands as `workspace.pnda_catalog.bronze_pnda_catalogo` (slug, titulo, descripcion, entidad, n_recursos, formatos, urls, plus timestamps and the `private` flag).
+5. `sample_resource()` — reads the first 200 rows of a CSV resource via a genuine partial HTTP read (`pandas.read_csv(url, nrows=...)`). XLSX has no partial-read equivalent for a remote URL, so it's size-capped (25MB) via a `HEAD` request first, then truncated to 200 rows after loading. Anything else (PDF, nested JSON, etc.) is logged and skipped, never raises.
+6. `build_report()` — datasets by entity (top 20), datasets by format, and how many datasets have zero downloadable resources at all.
 
 ## Files
 

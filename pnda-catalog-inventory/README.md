@@ -16,6 +16,8 @@ Verified directly against the live API, not assumed from CKAN documentation:
 
 A fourth thing showed up on the first real run rather than in isolated tests: a sustained pass at 10 concurrent workers over ~4,714 calls outlasts whatever rate-limiting the portal applies, and a batch of otherwise-normal slugs (plain ASCII, nothing exotic) starts failing after several minutes even though each one works fine on its own. Nothing is lost — failures are checkpointed, not dropped — see the retry step below.
 
+A fifth thing showed up on the second run: appending to the checkpoint files line-by-line (`open(path, "a")`, periodic `.flush()`) raised `OSError: [Errno 29] Illegal seek` on a Unity Catalog Volume in Databricks Free Edition. Object-storage-backed volumes don't reliably support the seek/flush behavior a buffered append-mode file object relies on. Checkpointing now rewrites the whole file in one shot every interval (write to a temp file, then atomically rename it into place) instead of appending — a pattern every storage backend handles the same way, since it never keeps a handle open and seeks within it.
+
 ## Method
 
 1. `fetch_catalog()` — one call to `package_list`, returns every dataset slug (~4,714).

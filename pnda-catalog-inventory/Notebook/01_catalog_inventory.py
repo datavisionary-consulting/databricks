@@ -100,11 +100,12 @@ def fetch_catalog() -> list[str]:
 
 # COMMAND ----------
 
-def _load_already_done(checkpoint_path: Path) -> dict[str, dict]:
-    """Reads whatever checkpoint already exists, keyed by slug, so re-runs can resume."""
+def _load_jsonl(path: Path) -> dict[str, dict]:
+    """Reads a checkpoint or failure file into a dict keyed by slug, so re-runs can
+    resume. Returns an empty dict if the file doesn't exist yet."""
     done = {}
-    if checkpoint_path.exists():
-        with open(checkpoint_path, "r", encoding="utf-8") as f:
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -115,6 +116,27 @@ def _load_already_done(checkpoint_path: Path) -> dict[str, dict]:
                 except json.JSONDecodeError:
                     continue
     return done
+
+
+# Kept as an alias -- earlier cells/instructions referred to this name directly.
+_load_already_done = _load_jsonl
+
+
+def _write_jsonl_atomic(path: Path, records) -> None:
+    """Writes an entire JSONL file in one shot (write to a temp file, then atomically
+    rename it into place), instead of opening the target in append mode and writing
+    incrementally. Unity Catalog Volumes on Databricks Free Edition don't reliably
+    support the seek/flush behavior Python's buffered append-mode file objects rely on --
+    appending line by line raised `OSError: [Errno 29] Illegal seek` partway through a
+    real run here. A full rewrite from a closed temp file avoids that: every write is a
+    single, complete object, which object-storage-backed volumes handle fine even when
+    in-place append does not."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        for rec in records:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    tmp_path.replace(path)
 
 
 def _fetch_one(slug: str, max_retries: int = MAX_RETRIES, request_delay: float = REQUEST_DELAY,
@@ -175,51 +197,50 @@ def _fetch_one(slug: str, max_retries: int = MAX_RETRIES, request_delay: float =
 def enrich_metadata(slugs: list[str], max_workers: int = MAX_WORKERS, max_retries: int = MAX_RETRIES,
                      request_delay: float = REQUEST_DELAY, backoff_base: float = 2.0,
                      backoff_cap: float = 30.0) -> list[dict]:
-    """Fetches package_show for every slug not already checkpointed, writing results
-    (and failures) to disk incrementally. Returns the full combined result set,
-    checkpointed records included. Concurrency/retry/backoff are parameters so a gentler
-    second pass over just the failed slugs (see retry_failed_slugs below) can turn the
-    load down without a second copy of this function."""
-    CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    already_done = _load_already_done(CHECKPOINT_PATH)
+    """Fetches package_show for every slug not already checkpointed, periodically
+    rewriting the checkpoint and failed-slugs files in full (see _write_jsonl_atomic).
+    Returns the full combined result set, checkpointed records included. Concurrency/
+    retry/backoff are parameters so a gentler second pass over just the failed slugs
+    (see retry_failed_slugs below) can turn the load down without a second copy of this
+    function."""
+    already_done = _load_jsonl(CHECKPOINT_PATH)
+    failed_records = _load_jsonl(FAILED_PATH)
     pending = [s for s in slugs if s not in already_done]
     log.info(f"enrich_metadata: {len(already_done):,} already checkpointed, {len(pending):,} to fetch "
              f"(max_workers={max_workers}, max_retries={max_retries})")
 
-    checkpoint_file = open(CHECKPOINT_PATH, "a", encoding="utf-8")
-    failed_file = open(FAILED_PATH, "a", encoding="utf-8")
     processed_since_flush = 0
     total_done = len(already_done)
     newly_failed = []
 
-    try:
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(_fetch_one, slug, max_retries, request_delay, backoff_base, backoff_cap): slug
-                for slug in pending
-            }
-            for future in as_completed(futures):
-                slug = futures[future]
-                try:
-                    record = future.result()
-                    checkpoint_file.write(json.dumps(record, ensure_ascii=False) + "\n")
-                    already_done[slug] = record
-                except Exception as exc:  # noqa: BLE001
-                    log.warning(f"giving up on slug={slug}: {exc}")
-                    failed_file.write(json.dumps({"slug": slug, "error": str(exc)}, ensure_ascii=False) + "\n")
-                    newly_failed.append(slug)
+    def _checkpoint_now():
+        _write_jsonl_atomic(CHECKPOINT_PATH, already_done.values())
+        _write_jsonl_atomic(FAILED_PATH, failed_records.values())
 
-                total_done += 1
-                processed_since_flush += 1
-                if processed_since_flush >= CHECKPOINT_EVERY:
-                    checkpoint_file.flush()
-                    failed_file.flush()
-                    processed_since_flush = 0
-                    log.info(f"{total_done:,}/{len(slugs):,} processed")
-    finally:
-        checkpoint_file.close()
-        failed_file.close()
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_fetch_one, slug, max_retries, request_delay, backoff_base, backoff_cap): slug
+            for slug in pending
+        }
+        for future in as_completed(futures):
+            slug = futures[future]
+            try:
+                record = future.result()
+                already_done[slug] = record
+                failed_records.pop(slug, None)  # succeeded this time -- drop from the failure log
+            except Exception as exc:  # noqa: BLE001
+                log.warning(f"giving up on slug={slug}: {exc}")
+                failed_records[slug] = {"slug": slug, "error": str(exc)}
+                newly_failed.append(slug)
+
+            total_done += 1
+            processed_since_flush += 1
+            if processed_since_flush >= CHECKPOINT_EVERY:
+                _checkpoint_now()
+                processed_since_flush = 0
+                log.info(f"{total_done:,}/{len(slugs):,} processed")
+
+    _checkpoint_now()  # final write for anything since the last checkpoint interval
 
     log.info(f"enrich_metadata: done. {len(already_done):,} succeeded, {len(newly_failed):,} newly failed "
              f"this pass, see {FAILED_PATH} for the full failure log.")
@@ -258,25 +279,19 @@ def retry_failed_slugs(cooldown_seconds: int = 30) -> list[dict]:
     """Reads whatever is currently in FAILED_PATH and retries just those slugs with a
     gentler configuration (3 workers instead of 10, longer backoff, more attempts).
     Returns the newly-recovered records; anything still failing after this pass stays
-    logged in FAILED_PATH for a human to look at."""
-    if not FAILED_PATH.exists():
-        log.info("retry_failed_slugs: no failed_slugs.jsonl yet, nothing to retry")
-        return []
-
-    with open(FAILED_PATH, "r", encoding="utf-8") as f:
-        failed_slugs = sorted({json.loads(line)["slug"] for line in f if line.strip()})
+    logged in FAILED_PATH for a human to look at. No need to clear the failure file
+    first -- enrich_metadata already removes a slug from it the moment that slug
+    succeeds, and rewrites the file as a whole (see _write_jsonl_atomic), so this always
+    ends with an accurate, deduplicated list of what's still actually failing."""
+    failed_slugs = sorted(_load_jsonl(FAILED_PATH).keys())
 
     if not failed_slugs:
-        log.info("retry_failed_slugs: failure log is empty")
+        log.info("retry_failed_slugs: failure log is empty, nothing to retry")
         return []
 
     log.info(f"retry_failed_slugs: {len(failed_slugs):,} slugs to retry, "
              f"waiting {cooldown_seconds}s first so the server can recover from the first pass")
     time.sleep(cooldown_seconds)
-
-    # Start this pass's failure log fresh -- whatever still fails after the gentle retry
-    # is what actually needs a human look, not a mix of two passes' worth of noise.
-    FAILED_PATH.unlink(missing_ok=True)
 
     recovered = enrich_metadata(
         failed_slugs,
@@ -291,15 +306,14 @@ def retry_failed_slugs(cooldown_seconds: int = 30) -> list[dict]:
 
 
 retried = retry_failed_slugs()
-if FAILED_PATH.exists():
-    with open(FAILED_PATH, "r", encoding="utf-8") as f:
-        still_failing = sum(1 for line in f if line.strip())
+still_failing = len(_load_jsonl(FAILED_PATH))
+if still_failing:
     print(f"{still_failing} slugs still failing after the gentle retry -- see {FAILED_PATH}")
 else:
     print("No slugs failing after the gentle retry.")
 
 # Reload everything from the checkpoint file so `records` reflects the retry pass too.
-records = list(_load_already_done(CHECKPOINT_PATH).values())
+records = list(_load_jsonl(CHECKPOINT_PATH).values())
 print(f"Final: {len(records):,} datasets with metadata, out of {len(slugs):,} in the catalog")
 
 # COMMAND ----------

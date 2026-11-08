@@ -6,3 +6,9 @@ predictions/
 .env
 __pycache__/
 *.pyc
+
+# credenciales: NUNCA al repo (Google desactiva claves expuestas)
+*service-account*.json
+*credentials*.json
+invoice-extraction-benchmark-*.json
+*.pem

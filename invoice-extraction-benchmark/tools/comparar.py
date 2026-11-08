@@ -21,23 +21,20 @@ from scipy.stats import binomtest, shapiro, ttest_rel, wilcoxon
 
 from eval_valores import HEADER, evaluate
 
-random.seed(42)
-
-
 def doc_score(r):
     return sum(l["completa"] for l in r["lines"]) / r["n_ref_lines"] if r["n_ref_lines"] else None
 
 
-def boot_ci(a, b, n=10000):
+def boot_ci(a, b, rng, n=10000):
     idx = range(len(a)); diffs = []
     for _ in range(n):
-        s = [random.choice(idx) for _ in idx]
+        s = [rng.choice(idx) for _ in idx]
         diffs.append(sum(b[i] - a[i] for i in s) / len(s))
     diffs.sort()
     return diffs[int(0.025 * n)], diffs[int(0.975 * n)]
 
 
-def paired(a, b):
+def paired(a, b, rng):
     d = [y - x for x, y in zip(a, b)]
     out = {"n": len(a), "media_M1": sum(a) / len(a), "media_M2": sum(b) / len(b), "dif_media": sum(d) / len(d)}
     nz = [x for x in d if x != 0]
@@ -46,7 +43,7 @@ def paired(a, b):
         out["prueba"] = "t pareada"; out["p"] = ttest_rel(b, a).pvalue
     else:
         out["prueba"] = "Wilcoxon"; out["p"] = wilcoxon(b, a).pvalue if nz else 1.0
-    out["ic95_dif"] = boot_ci(a, b)
+    out["ic95_dif"] = boot_ci(a, b, rng)
     return out
 
 
@@ -59,8 +56,9 @@ def mcnemar(x1, x2):
 
 def comparar(ann_dir, m1, m2, G):
     """ann_dir: carpeta de anotaciones; m1/m2: {docid: {"response": ...}}; G: {docid: grupo}.
-    Devuelve (res, R1, R2). Idempotente: misma entrada, misma salida (semilla fija en cada llamada)."""
-    random.seed(42)
+    Devuelve (res, R1, R2). Idempotente: misma entrada, misma salida (generador propio con semilla 42: no lo altera otro código
+    que use el módulo random, como los hilos de fondo de Databricks)."""
+    rng = random.Random(42)
     A = Path(ann_dir)
     R1, R2 = {}, {}
     for d in G:
@@ -70,7 +68,7 @@ def comparar(ann_dir, m1, m2, G):
     docs = [d for d in G if R1[d]["n_ref_lines"]]
     for grupo in ("todos", "0-shot", "1-3", "4+"):
         ds = [d for d in docs if grupo == "todos" or G[d] == grupo]
-        res["lineas"][grupo] = paired([doc_score(R1[d]) for d in ds], [doc_score(R2[d]) for d in ds])
+        res["lineas"][grupo] = paired([doc_score(R1[d]) for d in ds], [doc_score(R2[d]) for d in ds], rng)
     for k in HEADER:
         ds = [d for d in G if R1[d]["head"][k]["ref"]]
         x1 = [R1[d]["head"][k]["ok"] for d in ds]; x2 = [R2[d]["head"][k]["ok"] for d in ds]

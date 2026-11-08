@@ -19,8 +19,11 @@ from pathlib import Path
 from scipy.optimize import linear_sum_assignment
 
 TOL = {"cantidad": 1e-6, "costo_unitario": 0.01, "importe": 0.50}
-LI_MAP = {"cantidad": "line_item_quantity", "costo_unitario": "line_item_unit_price_gross",
-          "importe": "line_item_amount_gross", "descripcion": "line_item_description"}
+# precio e importe: bruto y, si no está anotado, neto (el esquema no distingue)
+LI_MAP = {"cantidad": ["line_item_quantity"],
+          "costo_unitario": ["line_item_unit_price_gross", "line_item_unit_price_net"],
+          "importe": ["line_item_amount_gross", "line_item_amount_net"],
+          "descripcion": ["line_item_description"]}
 CUR = {"$": "usd", "us$": "usd", "usd": "usd", "€": "eur", "eur": "eur", "£": "gbp", "gbp": "gbp", "cad": "cad"}
 
 
@@ -104,7 +107,9 @@ def evaluate(ann, resp):
     gl = {}
     for f in ann["line_item_extractions"]:
         gl.setdefault(f["line_item_id"], {}).setdefault(f["fieldtype"], f["text"])
-    g = [{k: (num(r.get(v)) if k != "descripcion" else r.get(v)) for k, v in LI_MAP.items()} for _, r in sorted(gl.items())]
+    def pick(r, srcs):
+        return next((r[x] for x in srcs if r.get(x) not in (None, "")), None)
+    g = [{k: (num(pick(r, v)) if k != "descripcion" else pick(r, v)) for k, v in LI_MAP.items()} for _, r in sorted(gl.items())]
     p = [{k: (num(val(li.get(k))) if k != "descripcion" else val(li.get(k))) for k in LI_MAP} for li in (resp.get("line_items") or [])]
 
     def score(a, b):

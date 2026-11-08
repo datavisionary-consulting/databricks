@@ -4,3 +4,5 @@ data/
 predictions/
 *.zip
 .env
+__pycache__/
+*.pyc

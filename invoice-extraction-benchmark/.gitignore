@@ -1,0 +1,6 @@
+# DocILE: licencia solo investigación, no redistribuir
+*.pdf
+data/
+predictions/
+*.zip
+.env

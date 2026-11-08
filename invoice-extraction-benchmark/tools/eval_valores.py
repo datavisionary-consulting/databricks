@@ -126,13 +126,20 @@ def evaluate(ann, resp):
         cost = [[-score(a, b) for b in p] for a in g]
         rows, cols = linear_sum_assignment(cost)
         pairs = [(r, c) for r, c in zip(rows, cols) if -cost[r][c] >= 1.0]
-    lines = []
+    lines, detail = [], []
     for r, c in pairs:
         a, b = g[r], p[c]
         res = {k: (abs(a[k] - b[k]) < TOL[k] + 1e-9) if (a[k] is not None and b[k] is not None) else (None if a[k] is None else False)
                for k in ("cantidad", "costo_unitario", "importe")}
         res["completa"] = all(v for v in res.values() if v is not None)
         lines.append(res)
+        detail.append({"estado": "emparejada", "ref": a, "pred": b, **res})
+    used_g = {r for r, _ in pairs}; used_p = {c for _, c in pairs}
+    detail += [{"estado": "no extraída", "ref": a, "pred": None} for i, a in enumerate(g) if i not in used_g]
+    detail += [{"estado": "sobrante", "ref": None, "pred": b} for i, b in enumerate(p) if i not in used_p]
+    for k, (kind, src) in HEADER.items():
+        head[k]["ref_txt"] = " | ".join(t for s in src for t in by.get(s, []))
+        head[k]["pred_txt"] = val(resp.get(k))
     # alertas de validación matemática (sobre lo extraído)
     alert = False
     for li in p:
@@ -145,7 +152,39 @@ def evaluate(ann, resp):
         alert = True
     error = (len(pairs) < len(g)) or (len(p) > len(pairs)) or any(not l["completa"] for l in lines) \
         or any(h["ref"] and not h["ok"] for h in head.values())
-    return {"head": head, "n_ref_lines": len(g), "n_pred_lines": len(p), "lines": lines, "alerta": alert, "error": error}
+    return {"head": head, "n_ref_lines": len(g), "n_pred_lines": len(p), "lines": lines, "detail": detail,
+            "alerta": alert, "error": error}
+
+
+def to_xlsx(R, path, grupo=None):
+    """Detalle para revisión manual (contiene texto de facturas: NO subir al repo)."""
+    from openpyxl import Workbook
+    wb = Workbook()
+    ws = wb.active; ws.title = "cabecera"
+    ws.append(["docid", "grupo", "campo", "anotado", "extraído", "acierto"])
+    for d, r in R.items():
+        for k, h in r["head"].items():
+            if h["ref"] or h["pred"]:
+                ws.append([d, (grupo or {}).get(d), k, h["ref_txt"], h["pred_txt"],
+                           "sí" if h["ok"] else ("—" if not h["ref"] else "no")])
+    ws = wb.create_sheet("lineas")
+    cols = ["cantidad", "costo_unitario", "importe"]
+    ws.append(["docid", "grupo", "estado", "descripción anotada", "descripción extraída"]
+              + [f"{c} anotado" for c in cols] + [f"{c} extraído" for c in cols]
+              + [f"{c} ok" for c in cols] + ["línea completa"])
+    for d, r in R.items():
+        for x in r["detail"]:
+            a, b = x["ref"] or {}, x["pred"] or {}
+            ok = lambda c: "" if x.get(c) is None else ("sí" if x[c] else "no")
+            ws.append([d, (grupo or {}).get(d), x["estado"], a.get("descripcion"), b.get("descripcion")]
+                      + [a.get(c) for c in cols] + [b.get(c) for c in cols] + [ok(c) for c in cols]
+                      + [ok("completa")])
+    ws = wb.create_sheet("alertas")
+    ws.append(["docid", "grupo", "líneas anotadas", "líneas extraídas", "alerta", "factura con error"])
+    for d, r in R.items():
+        ws.append([d, (grupo or {}).get(d), r["n_ref_lines"], r["n_pred_lines"],
+                   "sí" if r["alerta"] else "no", "sí" if r["error"] else "no"])
+    wb.save(path)
 
 
 def main(dataset_path, extracted_path, docids_path, out=None):
@@ -170,7 +209,12 @@ def main(dataset_path, extracted_path, docids_path, out=None):
     print(f"ALERTAS (validación matemática)  facturas con error: {tp + fn}/{len(R)} | detectadas por alerta: {tp} | "
           f"no detectadas: {fn} | falsas alarmas: {fp} | correctas sin alerta: {tn}")
     if out:
-        Path(out).write_text(json.dumps(R, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+        grupo = {d["docid"]: d.get("grupo") for d in json.loads(Path(docids_path).read_text(encoding="utf-8")) if isinstance(d, dict)}
+        if str(out).endswith(".xlsx"):
+            to_xlsx(R, out, grupo)
+        else:
+            Path(out).write_text(json.dumps(R, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+        print("Detalle guardado en:", out)
 
 
 if __name__ == "__main__":

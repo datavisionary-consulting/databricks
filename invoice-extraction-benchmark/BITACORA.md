@@ -116,8 +116,27 @@ Cada entrada registra qué se hizo, con qué datos, el comando exacto, el result
 
 ## E7 · Evaluación final M1 vs. M2 v2 sobre `val` (500)
 
-- **Notebook:** `Notebook/03_extract_m2_v2` (celdas 3 y 4).
-- **Estado:** en ejecución.
+- **Extracción:** `Notebook/03_extract_m2_v2` (celdas 3 y 4). 341.7 s de lectura y 408.1 s de extracción para 500 documentos.
+- **Evaluación:** `Notebook/04_evaluate` (usa `tools/eval_valores.py` y `tools/comparar.py`). Entradas en el volume `eval_inputs/`.
+- **Resultados** (tabla `ieb_eval_resumen`, hoja pública `ieb_resultados_publicos`):
+
+| Indicador | M1 | M2 v2 | Prueba | p |
+|---|---|---|---|---|
+| Línea completa, documentos con líneas (458) | 61.4 % | 72.7 % | Wilcoxon | < 0.001 |
+| Diseños no vistos, 0-shot (98) | 32.8 % | 77.1 % | Wilcoxon | < 0.001 |
+| Diseños vistos 1 a 3 veces (117) | 52.4 % | 63.6 % | Wilcoxon | 0.039 |
+| Diseños vistos 4 o más veces (243) | 77.2 % | 75.3 % | Wilcoxon | 0.491 |
+| Total del documento (468) | 87.8 % | 93.2 % | McNemar | 0.004 |
+| Moneda (331) | 4.5 % | 92.7 % | McNemar | < 0.001 |
+
+- **Lectura:** M2 supera a M1 sobre todo en diseños no vistos. En diseños frecuentes no hay diferencia significativa.
+- **IC 95 % bootstrap:** generador propio con semilla 42 (commit `ca856da`). Con el generador global, Databricks daba intervalos distintos en cada corrida.
+
+## E8 · Publicación en Google Sheets (2026-11-08)
+
+- **Notebook:** `Notebook/05_export_gsheets`. Credencial en el secret `invoice-extraction-benchmark/gsheets_sa_json`.
+- **Llave:** columna `clave` en cada pestaña. **Carga:** `hash_fila`, `id_carga` y `cargado_en` (hora de Lima). Bitácora de cargas en la pestaña `cargas`.
+- **Prueba de idempotencia:** 04 → 05 → 04 → 05 en modo incremental. La segunda carga dio 0 filas nuevas y 0 actualizadas.
 
 ---
 

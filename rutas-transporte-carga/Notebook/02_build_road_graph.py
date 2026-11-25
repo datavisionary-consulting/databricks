@@ -46,6 +46,7 @@ T_COMPS = "workspace.rutas_transporte.silver_graph_components"
 T_SENS = "workspace.rutas_transporte.silver_graph_tolerance_sensitivity"
 T_VALID = "workspace.rutas_transporte.silver_graph_route_validation"
 T_LOOPS = "workspace.rutas_transporte.silver_graph_self_loops"
+T_FIXES = "workspace.rutas_transporte.silver_graph_geometry_fixes"
 
 TOLERANCES_M = [5, 20, 50, 100, 250]   # sensitivity sweep
 TOL_M = 50                              # final choice; justified by the sweep below
@@ -74,6 +75,40 @@ roads = roads.drop(columns="geometry_wkt")
 
 parts_wgs, owner = shapely.get_parts(geoms_wgs, return_index=True)
 parts_utm = reproject(parts_wgs, to_utm)
+
+# Out-and-back digitizing error: a line that goes to its far point and retraces itself back
+# to the start (found in PE-1NQ, Id 5493: 69.5 km of trace for 34.66 official km). Its ends
+# coincide, so it would collapse into a self-loop and the whole road would leave the graph.
+# Rule: ends within TOL_FIX_M AND the return leg retraces the outward leg (Hausdorff <= RETRACE_M)
+# -> keep only the outward leg, cut at the vertex farthest from the start. A real ring
+# (roundabout, loop road) or a hairpin fails the Hausdorff test and is left untouched.
+# RETRACE_M is strict on purpose: the real cases found retrace exactly (0 m); with 50 m it also
+# caught ~150 m hairpins that are not retraces.
+TOL_FIX_M = 50
+RETRACE_M = 5
+fixes = []
+gap = shapely.distance(shapely.get_point(parts_utm, 0), shapely.get_point(parts_utm, -1))
+for i in np.where((gap <= TOL_FIX_M) & (shapely.length(parts_utm) > 2 * TOL_FIX_M))[0]:
+    xy = shapely.get_coordinates(parts_utm[i])
+    k = int(np.argmax(np.hypot(*(xy - xy[0]).T)))
+    if k < 1 or len(xy) - k < 2:
+        continue
+    out, back = shapely.LineString(xy[:k + 1]), shapely.LineString(xy[k:][::-1])
+    h = shapely.hausdorff_distance(out, back)
+    if h <= RETRACE_M:
+        fixes.append({"row": int(owner[i]), "part": int(i), "hausdorff_m": float(h),
+                      "length_m_before": float(parts_utm[i].length), "length_m_after": float(out.length)})
+        parts_utm[i] = out
+        parts_wgs[i] = reproject(np.array([out], dtype=object), to_wgs)[0]
+fixes_df = (pd.DataFrame(fixes, columns=["row", "part", "hausdorff_m", "length_m_before", "length_m_after"])
+              .astype({"row": "int64", "part": "int64"})
+              .join(roads[["Id", "cCodRuta", "cDepartame", "dLongitud"]], on="row"))
+FIX_SCHEMA = ("row long, part long, hausdorff_m double, length_m_before double, length_m_after double, "
+              "Id double, cCodRuta string, cDepartame string, dLongitud double")
+spark.createDataFrame(fixes_df, schema=FIX_SCHEMA).write.mode("overwrite") \
+    .option("overwriteSchema", "true").saveAsTable(T_FIXES)
+print(f"out-and-back lines cut: {len(fixes_df)}")
+display(fixes_df)
 
 # geodesic km of each part, and a per-part factor to convert UTM metres -> geodesic km
 geo_km = np.array([geod.geometry_length(g) / 1000 for g in parts_wgs])
@@ -321,6 +356,6 @@ def route_check(code):
             "dif_pct": None if best is None else float((best - official) / official),
             "subgrafo_conexo": nx.is_connected(G), "componentes_ruta": nx.number_connected_components(G)}
 
-valid = pd.DataFrame([route_check(c) for c in ["PE-1N", "PE-1S", "PE-3N", "PE-3S", "PE-5N", "PE-22"]])
+valid = pd.DataFrame([route_check(c) for c in ["PE-1N", "PE-1S", "PE-3N", "PE-3S", "PE-5N", "PE-22", "PE-1NQ"]])
 spark.createDataFrame(valid).write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(T_VALID)
 display(valid)

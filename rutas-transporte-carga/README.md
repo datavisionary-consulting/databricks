@@ -7,7 +7,7 @@
 | Notebook | Estado | Tablas en `workspace.rutas_transporte` |
 |---|---|---|
 | `01_download_and_load` | Corrido | `bronze_red_vial_2016` (3.750 tramos, 150 rutas), `bronze_peajes_2024_2025` (233 filas = 78 peajes × 3 cortes), `bronze_source_files` |
-| `02_build_road_graph` | Corrido | `silver_graph_nodes`, `silver_graph_edges`, `silver_graph_components`, `silver_graph_tolerance_sensitivity`, `silver_graph_route_validation`, `silver_graph_self_loops` |
+| `02_build_road_graph` | Corrido | `silver_graph_nodes`, `silver_graph_edges`, `silver_graph_components`, `silver_graph_tolerance_sensitivity`, `silver_graph_route_validation`, `silver_graph_self_loops`, `silver_graph_geometry_fixes` |
 | `03_cost_model` | Por construir | — |
 | `04_route_and_compare` | Por construir | — |
 
@@ -15,27 +15,34 @@ Dato clave para 03: **el GeoJSON de peajes no trae tarifas**; hay que sacarlas d
 
 Archivos base en el volumen `workspace.rutas_transporte.raw_data` (subidos desde el navegador: la descarga por script devolvía HTTP 418 del WAF del portal).
 
-### Resultados del grafo (tolerancia 50 m)
+### Resultados del grafo (tolerancia 50 m, corrida 2026-11-25)
 
-- **3.756 nodos, 3.906 aristas, 4 componentes.** Sin corregir (extremos tal cual) eran 293 componentes y el mayor tenía 51 % de los km.
-- **El componente principal cubre el 99,1 % de los km de la red** (28.271 km de 28.526 km; 25 departamentos, todas las troncales). Fuera del componente principal: PE-5NI en Loreto (176 km, sin enlace terrestre, real) y dos fragmentos de PE-5NA en Huánuco (< 1 km). Fuera del grafo por completo: PE-1NQ (error de geometría, ver abajo).
-- **Validación contra el km oficial del MTC** (camino más corto dentro de cada ruta vs `max(dkmFinal) − min(dkmInicio)`): diferencia máxima 0,44 % (PE-22); PE-1N, PE-1S, PE-3N, PE-3S y PE-5N dentro de ±0,3 %, cada una en un solo componente.
+- **3.758 nodos, 3.891 aristas, 3 componentes.** Sin corregir (extremos tal cual) eran 293 componentes y el mayor tenía 51 % de los km.
+- **El componente principal cubre el 99,35 % de los km de la red** (28.488 km; 25 departamentos, todas las troncales). Fuera de él: PE-5NI en Loreto (176 km, sin enlace terrestre, real) y un fragmento de PE-5NA en Huánuco (0,3 km).
+- **Validación contra el km oficial del MTC** (camino más corto dentro de cada ruta vs `max(dkmFinal) − min(dkmInicio)`): diferencia máxima 0,44 % (PE-22); PE-1N, PE-1S, PE-3N, PE-3S, PE-5N y PE-1NQ dentro de ±0,3 %, cada una en un solo componente.
 
-### Denominador único y self-loops (corrida 2026-11-25)
+### Correcciones de geometría
 
-Todos los porcentajes de km en 02 se calculan sobre **la red completa: 28.526,4 km** (geometría antes de descartar nada). Antes, `silver_graph_components.km_share` dividía por los km del grafo final y daba 99,4 %; ahora da 99,1 %, igual que `silver_graph_tolerance_sensitivity`. Esta tabla trae además `network_km`, `graph_km` y `self_loops_km`.
+**Trazos de ida y vuelta** (`silver_graph_geometry_fixes`). Algunos registros del shapefile van hasta su punto más lejano y vuelven por el mismo camino al inicio. Como sus extremos coinciden, el grafo los descartaba enteros. Regla en 02: extremos a ≤ 50 m y la vuelta repite la ida (distancia de Hausdorff ≤ 5 m) → se conserva solo la ida. Un anillo real o una curva cerrada no cumplen la segunda condición.
 
-Un self-loop es un tramo cuyos dos extremos caen en el mismo nodo; se descarta del grafo. A 50 m son 258 tramos y 77,7 km, auditados en `silver_graph_self_loops`:
+| Ruta | Registro | Piezas | Desvío ida/vuelta | km antes | km después | km oficial (`dLongitud`) |
+|---|---|---|---|---|---|---|
+| PE-1NQ (Áncash) | 5493 | 1 | 0 m | 69,38 | 34,69 | 34,66 |
+| PE-5NA (Huánuco) | 3540 | 21 | 0 m | 7,21 | 3,60 | 5,10 |
+
+PE-1NQ estaba fuera del grafo y ahora entra completa (34,64 km por el grafo, −0,05 % vs oficial). En PE-5NA la mitad (3,6 km) no llega a los 5,1 km oficiales: falta revisar ese registro.
+
+**Denominador único.** Todos los porcentajes de km en 02 se calculan sobre la red completa (28.488 km tras las correcciones), antes de descartar self-loops. `silver_graph_tolerance_sensitivity` trae `network_km`, `graph_km` y `self_loops_km`.
+
+**Self-loops** (`silver_graph_self_loops`): tramos cuyos dos extremos caen en el mismo nodo; se descartan. A 50 m quedan 255 tramos y 7,9 km (antes de corregir los trazos de ida y vuelta eran 77,7 km):
 
 | Tipo | Tramos | km | Qué es |
 |---|---|---|---|
-| `extremos_cercanos` | 35 | 72,3 | Más largo que 50 m, pero termina a ≤ 50 m de donde empieza |
 | `corto` | 217 | 4,8 | Pieza de ≤ 50 m |
+| `extremos_cercanos` | 32 | 2,4 | Más larga que 50 m, termina a ≤ 50 m de donde empieza |
 | `cadena` | 6 | 0,7 | Extremos a 51–76 m, unidos por una cadena de puntos intermedios |
 
-**Hallazgo: PE-1NQ (Áncash) falta entera en el grafo.** Su único registro (Id 5493) es una geometría de ida y vuelta: 69,5 km de trazo para 34,66 km oficiales, y termina donde empieza. Cae como self-loop y explica 69,3 de los 77,7 km descartados. El resto son piezas de menos de 0,5 km. Pendiente decidir la corrección (p. ej. cortar el trazo en su punto más lejano del inicio y usar la mitad).
-
-Tercer total, para no confundir: `bronze_red_vial_2016.length_km_geodesic` suma 28.584 km. 01 mide con haversine (esfera) y 02 con el elipsoide WGS84; esa es la causa probable de la diferencia (0,2 %), no verificada. El atributo oficial `dLongitud` suma 28.502 km.
+Otros totales, para no confundir: `bronze_red_vial_2016.length_km_geodesic` suma 28.584 km y 02, antes de corregir, mide 28.526 km. 01 usa haversine (esfera) y 02 el elipsoide WGS84; esa es la causa probable de esa diferencia (0,2 %), no verificada. El atributo oficial `dLongitud` suma 28.502 km.
 
 ## El objetivo
 

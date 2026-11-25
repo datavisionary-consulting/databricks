@@ -1,15 +1,38 @@
 # Rutas de Transporte Terrestre de Mercancías (Perú)
 
-**Status: pendiente de descargar los dos archivos base.** No construido todavía — este README es el plan de trabajo, como los demás proyectos de este repositorio antes de tener resultados reales.
+**Status (2026-11-24): grafo vial construido y validado (notebooks 01 y 02). Pendiente: modelo de costo (03) y comparación de rutas (04).**
 
-## ⚠️ Pendiente antes de empezar a construir
+## Estado actual
 
-Descargar estos dos archivos desde [datosabiertos.gob.pe](https://www.datosabiertos.gob.pe) y confirmar su estructura real (columnas, sistema de coordenadas, si la red es un grafo conexo) antes de escribir cualquier pipeline:
+| Notebook | Estado | Tablas en `workspace.rutas_transporte` |
+|---|---|---|
+| `01_download_and_load` | Corrido | `bronze_red_vial_2016` (3.750 tramos, 150 rutas), `bronze_peajes_2024_2025` (233 filas = 78 peajes × 3 cortes), `bronze_source_files` |
+| `02_build_road_graph` | Corrido | `silver_graph_nodes`, `silver_graph_edges`, `silver_graph_components`, `silver_graph_tolerance_sensitivity`, `silver_graph_route_validation` |
+| `03_cost_model` | Por construir | — |
+| `04_route_and_compare` | Por construir | — |
 
-1. **"MTC - DATOS ESPACIALES DE LA RED VIAL NACIONAL (2016)"** (ZIP)
-2. **"Unidades de Peaje de la Red Vial Nacional 2024 – 2025"** (GEOJSON)
+Dato clave para 03: **el GeoJSON de peajes no trae tarifas**; hay que sacarlas de otra fuente (OSITRAN / Provías, ver fuentes 5).
 
-No asumir el esquema de ninguno de los dos sin haberlos abierto primero.
+Archivos base en el volumen `workspace.rutas_transporte.raw_data` (subidos desde el navegador: la descarga por script devolvía HTTP 418 del WAF del portal).
+
+### Resultados del grafo (tolerancia 50 m)
+
+- **3.756 nodos, 3.906 aristas, 4 componentes.** Sin corregir (extremos tal cual) eran 293 componentes y el mayor tenía 51 % de los km.
+- **El componente principal cubre el 99,1 % de los km de la red** (28.271 km de 28.526 km; 25 departamentos, todas las troncales). Lo que queda fuera es real, no un error: PE-5NI en Loreto (176 km, sin enlace terrestre) y dos fragmentos de PE-5NA en Huánuco (< 1 km).
+- **Validación contra el km oficial del MTC** (camino más corto dentro de cada ruta vs `max(dkmFinal) − min(dkmInicio)`): diferencia máxima 0,44 % (PE-22); PE-1N, PE-1S, PE-3N, PE-3S y PE-5N dentro de ±0,3 %, cada una en un solo componente.
+
+### Nota sobre los porcentajes de conectividad
+
+Dos tablas dan cifras distintas para lo mismo, porque usan denominadores distintos:
+
+| Tabla | Cifra | Denominador |
+|---|---|---|
+| `silver_graph_tolerance_sensitivity.largest_comp_km_share` | 99,1 % | 28.526 km: toda la geometría, antes de descartar self-loops |
+| `silver_graph_components.km_share` | 99,4 % | 28.449 km: solo las aristas del grafo final |
+
+La diferencia (77,7 km) son los 258 self-loops descartados en 02 (tramos cuyos dos extremos caen en el mismo nodo con 50 m de tolerancia). La cifra a citar es **99,1 %**, porque se mide sobre la red completa. Pendiente: revisar qué tramos son esos self-loops; 258 × 50 m da como máximo 12,9 km, así que al menos ~65 km vienen de tramos más largos (posibles anillos o vueltas cerradas).
+
+Tercer total, para no confundir: `bronze_red_vial_2016.length_km_geodesic` suma 28.584 km. 01 mide con haversine (esfera) y 02 con el elipsoide WGS84; esa es la causa probable de la diferencia (0,2 %), no verificada. El atributo oficial `dLongitud` suma 28.502 km.
 
 ## El objetivo
 
@@ -47,4 +70,5 @@ Todas confirmadas como datasets reales y descargables durante la construcción d
 
 ## Files
 
-- `Notebook/` — notebooks reales, en orden de ejecución, una vez construidos.
+- `Notebook/01_download_and_load.py` — carga de red vial 2016 y peajes 2024-2025 a bronze.
+- `Notebook/02_build_road_graph.py` — grafo navegable, sensibilidad a la tolerancia, componentes y validación.

@@ -1,6 +1,6 @@
 # Rutas de Transporte Terrestre de Mercancías (Perú)
 
-**Status (2026-11-25): grafo vial construido y validado (notebooks 01 y 02). Siguiente: cargar el dataset de emergencias viales del MTC y ubicarlo en el grafo (03).**
+**Status (2026-11-25): grafo vial (01-02) y emergencias 2026 ubicadas en el grafo (03). Siguiente: modelo de costo con costo esperado de interrupción (04).**
 
 ## Estado actual
 
@@ -8,7 +8,7 @@
 |---|---|---|
 | `01_download_and_load` | Corrido | `bronze_red_vial_2016` (3.750 tramos, 150 rutas), `bronze_peajes_2024_2025` (233 filas = 78 peajes × 3 cortes), `bronze_source_files` |
 | `02_build_road_graph` | Corrido | `silver_graph_nodes`, `silver_graph_edges`, `silver_graph_components`, `silver_graph_tolerance_sensitivity`, `silver_graph_route_validation`, `silver_graph_self_loops`, `silver_graph_geometry_fixes` |
-| `03_emergencies_on_graph` | Por construir | — |
+| `03_emergencies_on_graph` | Corrido | `bronze_emergencias_2026`, `silver_emergencias_route_coverage`, `silver_emergencias_on_edges`, `silver_edge_emergencias` |
 | `04_cost_model` | Por construir | — |
 | `05_routes_and_resilience` | Por construir | — |
 
@@ -44,6 +44,21 @@ PE-1NQ estaba fuera del grafo y ahora entra completa (34,64 km por el grafo, −
 | `cadena` | 6 | 0,7 | Extremos a 51–76 m, unidos por una cadena de puntos intermedios |
 
 Otros totales, para no confundir: `bronze_red_vial_2016.length_km_geodesic` suma 28.584 km y 02, antes de corregir, mide 28.526 km. 01 usa haversine (esfera) y 02 el elipsoide WGS84; esa es la causa probable de esa diferencia (0,2 %), no verificada. El atributo oficial `dLongitud` suma 28.502 km.
+
+### Emergencias 2026 sobre el grafo (03, corrida 2026-11-25)
+
+Fuente: MTC-COES, 1.362 emergencias del 01.01 al 20.08.2026; 86 % por lluvias. Las de enero a marzo suman 809.
+
+| Ubicación | Eventos | Con interrupción inicial | Regla |
+|---|---|---|---|
+| `ruta_propia` | 1.246 | 251 | Arista de su misma ruta a ≤ 500 m (mediana 7 m, p95 49 m) |
+| `ruta_corregida` | 24 | 5 | Su ruta está a > 5 km o no existe en el grafo, pero hay otra ruta a ≤ 100 m: el código de ruta del reporte está mal, el punto está sobre una vía real |
+| `no_ubicado` | 92 | 30 | Sobre todo rutas que no existen en la red 2016 (PE-1SI, PE-5NG, PE-36G…) |
+
+- **93 % de los eventos quedan ubicados** en 583 aristas, que suman 8.545 km (30 % de la red).
+- Rutas con más eventos: PE-3N (128), PE-5N (108), PE-22 (58, 19 con interrupción inicial), PE-5NA (52). PE-3S tiene menos eventos (38), pero 24 empezaron con la vía interrumpida.
+- **El km progresivo del reporte no sirve para validar**: en 198 eventos ubicados sobre su ruta, el km 2026 no coincide con el del shapefile 2016 (desfase mediano en PE-3N: 31 km). Se guarda como información; la ubicación usa las coordenadas.
+- `dias_hasta_normal` mide hasta el fin de los trabajos, no la duración del corte.
 
 ## El objetivo
 
@@ -94,7 +109,7 @@ Nombres exactos tal como aparecen en [datosabiertos.gob.pe](https://www.datosabi
 
 1. `01_download_and_load` — carga red vial 2016 y peajes 2024-2025 a bronze. **Hecho.**
 2. `02_build_road_graph` — grafo navegable, correcciones de geometría, validación vs km oficial. **Hecho.**
-3. `03_emergencies_on_graph` — carga el reporte de emergencias MTC-COES y lo ubica sobre las aristas del grafo.
+3. `03_emergencies_on_graph` — carga el reporte de emergencias MTC-COES y lo ubica sobre las aristas del grafo. **Hecho.**
 4. `04_cost_model` — costo de cada arista: combustible, peaje, tiempo y costo esperado de interrupción.
 5. `05_routes_and_resilience` — rutas de menor costo esperado, escenarios de corte de tramos críticos y ranking de tramos.
 
@@ -102,3 +117,4 @@ Nombres exactos tal como aparecen en [datosabiertos.gob.pe](https://www.datosabi
 
 - `Notebook/01_download_and_load.py` — carga de red vial 2016 y peajes 2024-2025 a bronze.
 - `Notebook/02_build_road_graph.py` — grafo navegable, sensibilidad a la tolerancia, componentes y validación.
+- `Notebook/03_emergencies_on_graph.py` — emergencias MTC-COES 2026 ubicadas en las aristas del grafo y resumen por arista.

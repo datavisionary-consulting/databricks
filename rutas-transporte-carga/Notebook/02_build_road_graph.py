@@ -45,6 +45,7 @@ T_EDGES = "workspace.rutas_transporte.silver_graph_edges"
 T_COMPS = "workspace.rutas_transporte.silver_graph_components"
 T_SENS = "workspace.rutas_transporte.silver_graph_tolerance_sensitivity"
 T_VALID = "workspace.rutas_transporte.silver_graph_route_validation"
+T_LOOPS = "workspace.rutas_transporte.silver_graph_self_loops"
 
 TOLERANCES_M = [5, 20, 50, 100, 250]   # sensitivity sweep
 TOL_M = 50                              # final choice; justified by the sweep below
@@ -150,13 +151,18 @@ def build(lines, tol):
     u, v = cid[:m], cid[m:]
     km = shapely.length(pieces) * km_per_m[src]
     edges = pd.DataFrame({"u": u, "v": v, "part": src, "km": km})
-    self_loops = edges["u"] == edges["v"]
+    self_loops = (edges["u"] == edges["v"]).values
+    # keep what is dropped, so it can be audited (section 6)
+    loop_geoms = pieces[self_loops]
+    loops = edges[self_loops].rename(columns={"u": "node"}).drop(columns="v").reset_index(drop=True)
+    loops["length_m_utm"] = shapely.length(loop_geoms)
+    loops["end_gap_m"] = shapely.distance(shapely.get_point(loop_geoms, 0), shapely.get_point(loop_geoms, -1))
     edges = edges[~self_loops].reset_index(drop=True)
-    pieces = pieces[~self_loops.values]
+    pieces = pieces[~self_loops]
     xy = shapely.get_coordinates(ends)
     nodes = (pd.DataFrame({"node": cid, "x": xy[:, 0], "y": xy[:, 1]})
                .groupby("node", as_index=False)[["x", "y"]].mean())
-    return nodes, edges, pieces, n_cuts, int(self_loops.sum())
+    return nodes, edges, pieces, n_cuts, loops, loop_geoms
 
 
 def components(edges):
@@ -175,17 +181,21 @@ def components(edges):
 
 # COMMAND ----------
 
+# Single denominator for every km share in this notebook: the full network geometry,
+# before anything is dropped. Shares over the final graph only would hide the self-loop km.
 total_km = geo_km.sum()
 sens = []
 for tol in TOLERANCES_M:
-    nodes, edges, _, n_cuts, n_loops = build(parts_utm, tol)
+    nodes, edges, _, n_cuts, loops, _ = build(parts_utm, tol)
     comp_of = components(edges)
     edges["comp"] = edges["u"].map(comp_of)
     km_by_comp = edges.groupby("comp")["km"].sum().sort_values(ascending=False)
     deg = pd.concat([edges["u"], edges["v"]]).value_counts()
     sens.append({
         "tol_m": tol, "t_junction_cuts": n_cuts, "nodes": len(nodes), "edges": len(edges),
-        "self_loops_dropped": n_loops, "components": len(km_by_comp),
+        "self_loops_dropped": len(loops), "self_loops_km": float(loops["km"].sum()),
+        "network_km": float(total_km), "graph_km": float(edges["km"].sum()),
+        "components": len(km_by_comp),
         "largest_comp_km_share": float(km_by_comp.iloc[0] / total_km),
         "dead_ends": int((deg == 1).sum()),
     })
@@ -200,7 +210,7 @@ display(sens_df)
 
 # COMMAND ----------
 
-nodes, edges, pieces, n_cuts, n_loops = build(parts_utm, TOL_M)
+nodes, edges, pieces, n_cuts, loops, loop_geoms = build(parts_utm, TOL_M)
 comp_of = components(edges)
 edges["comp"] = edges["u"].map(comp_of)
 nodes["comp"] = nodes["node"].map(comp_of)
@@ -241,14 +251,47 @@ comps = (edges.groupby("comp")
               rutas=("cCodRuta", lambda s: ", ".join(sorted(set(s)))),
               departamentos=("cDepartame", lambda s: ", ".join(sorted(set(s)))))
          .reset_index().sort_values("km", ascending=False))
-comps["km_share"] = comps["km"] / comps["km"].sum()
+comps["km_share"] = comps["km"] / total_km          # same denominator as section 3
+print(f"network_km={total_km:,.1f} graph_km={edges['length_km'].sum():,.1f} "
+      f"self_loops={len(loops)} self_loops_km={loops['km'].sum():,.1f}")
 spark.createDataFrame(comps).write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(T_COMPS)
 display(comps.head(25))
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 6. Validation against the official kilometre markers
+# MAGIC ## 6. Self-loops: what the graph drops
+# MAGIC
+# MAGIC A piece whose two ends fall in the same node cluster becomes a self-loop and is dropped
+# MAGIC (it can never shorten a route). Its km leave the graph, so they are audited here, by cause:
+# MAGIC - `corto`: the piece is no longer than `TOL_M` (digitizing noise or a tiny stub).
+# MAGIC - `extremos_cercanos`: longer than `TOL_M` but its two ends are within `TOL_M` (a closed ring,
+# MAGIC   e.g. a roundabout or a loop road).
+# MAGIC - `cadena`: its ends are farther than `TOL_M` apart, yet union-find merged them through a
+# MAGIC   chain of intermediate endpoints. This is the case to review: a real road collapsed.
+
+# COMMAND ----------
+
+loops["tipo"] = np.select(
+    [loops["length_m_utm"] <= TOL_M, loops["end_gap_m"] <= TOL_M],
+    ["corto", "extremos_cercanos"], default="cadena")
+loops["row"] = owner[loops["part"].values]
+loops = loops.join(roads[["Id", "cCodRuta", "cDepartame", "cSuperfici", "dkmInicio", "dkmFinal"]], on="row")
+loops["geometry_wkt"] = shapely.to_wkt(reproject(loop_geoms, to_wgs), rounding_precision=6)
+loops = (loops.drop(columns=["part", "row"])
+              .rename(columns={"km": "length_km", "Id": "tramo_id"})
+              .sort_values("length_km", ascending=False).reset_index(drop=True))
+spark.createDataFrame(loops).write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(T_LOOPS)
+
+display(loops.groupby("tipo").agg(n=("length_km", "size"), km=("length_km", "sum"),
+                                  max_km=("length_km", "max"), max_gap_m=("end_gap_m", "max"))
+             .reset_index())
+display(loops.drop(columns="geometry_wkt").head(25))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 7. Validation against the official kilometre markers
 # MAGIC
 # MAGIC For each trunk route, the shortest path *inside that route's own edges* between its first and
 # MAGIC last record should match `max(dkmFinal) - min(dkmInicio)` (the official progressive km).

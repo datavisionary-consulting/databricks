@@ -7,7 +7,7 @@
 | Notebook | Estado | Tablas en `workspace.rutas_transporte` |
 |---|---|---|
 | `01_download_and_load` | Corrido | `bronze_red_vial_2016` (3.750 tramos, 150 rutas), `bronze_peajes_2024_2025` (233 filas = 78 peajes × 3 cortes), `bronze_source_files` |
-| `02_build_road_graph` | Corrido | `silver_graph_nodes`, `silver_graph_edges`, `silver_graph_components`, `silver_graph_tolerance_sensitivity`, `silver_graph_route_validation` |
+| `02_build_road_graph` | Corrido | `silver_graph_nodes`, `silver_graph_edges`, `silver_graph_components`, `silver_graph_tolerance_sensitivity`, `silver_graph_route_validation`, `silver_graph_self_loops` |
 | `03_cost_model` | Por construir | — |
 | `04_route_and_compare` | Por construir | — |
 
@@ -18,19 +18,22 @@ Archivos base en el volumen `workspace.rutas_transporte.raw_data` (subidos desde
 ### Resultados del grafo (tolerancia 50 m)
 
 - **3.756 nodos, 3.906 aristas, 4 componentes.** Sin corregir (extremos tal cual) eran 293 componentes y el mayor tenía 51 % de los km.
-- **El componente principal cubre el 99,1 % de los km de la red** (28.271 km de 28.526 km; 25 departamentos, todas las troncales). Lo que queda fuera es real, no un error: PE-5NI en Loreto (176 km, sin enlace terrestre) y dos fragmentos de PE-5NA en Huánuco (< 1 km).
+- **El componente principal cubre el 99,1 % de los km de la red** (28.271 km de 28.526 km; 25 departamentos, todas las troncales). Fuera del componente principal: PE-5NI en Loreto (176 km, sin enlace terrestre, real) y dos fragmentos de PE-5NA en Huánuco (< 1 km). Fuera del grafo por completo: PE-1NQ (error de geometría, ver abajo).
 - **Validación contra el km oficial del MTC** (camino más corto dentro de cada ruta vs `max(dkmFinal) − min(dkmInicio)`): diferencia máxima 0,44 % (PE-22); PE-1N, PE-1S, PE-3N, PE-3S y PE-5N dentro de ±0,3 %, cada una en un solo componente.
 
-### Nota sobre los porcentajes de conectividad
+### Denominador único y self-loops (corrida 2026-11-25)
 
-Dos tablas dan cifras distintas para lo mismo, porque usan denominadores distintos:
+Todos los porcentajes de km en 02 se calculan sobre **la red completa: 28.526,4 km** (geometría antes de descartar nada). Antes, `silver_graph_components.km_share` dividía por los km del grafo final y daba 99,4 %; ahora da 99,1 %, igual que `silver_graph_tolerance_sensitivity`. Esta tabla trae además `network_km`, `graph_km` y `self_loops_km`.
 
-| Tabla | Cifra | Denominador |
-|---|---|---|
-| `silver_graph_tolerance_sensitivity.largest_comp_km_share` | 99,1 % | 28.526 km: toda la geometría, antes de descartar self-loops |
-| `silver_graph_components.km_share` | 99,4 % | 28.449 km: solo las aristas del grafo final |
+Un self-loop es un tramo cuyos dos extremos caen en el mismo nodo; se descarta del grafo. A 50 m son 258 tramos y 77,7 km, auditados en `silver_graph_self_loops`:
 
-La diferencia (77,7 km) son los 258 self-loops descartados en 02 (tramos cuyos dos extremos caen en el mismo nodo con 50 m de tolerancia). La cifra a citar es **99,1 %**, porque se mide sobre la red completa. Pendiente: revisar qué tramos son esos self-loops; 258 × 50 m da como máximo 12,9 km, así que al menos ~65 km vienen de tramos más largos (posibles anillos o vueltas cerradas).
+| Tipo | Tramos | km | Qué es |
+|---|---|---|---|
+| `extremos_cercanos` | 35 | 72,3 | Más largo que 50 m, pero termina a ≤ 50 m de donde empieza |
+| `corto` | 217 | 4,8 | Pieza de ≤ 50 m |
+| `cadena` | 6 | 0,7 | Extremos a 51–76 m, unidos por una cadena de puntos intermedios |
+
+**Hallazgo: PE-1NQ (Áncash) falta entera en el grafo.** Su único registro (Id 5493) es una geometría de ida y vuelta: 69,5 km de trazo para 34,66 km oficiales, y termina donde empieza. Cae como self-loop y explica 69,3 de los 77,7 km descartados. El resto son piezas de menos de 0,5 km. Pendiente decidir la corrección (p. ej. cortar el trazo en su punto más lejano del inicio y usar la mitad).
 
 Tercer total, para no confundir: `bronze_red_vial_2016.length_km_geodesic` suma 28.584 km. 01 mide con haversine (esfera) y 02 con el elipsoide WGS84; esa es la causa probable de la diferencia (0,2 %), no verificada. El atributo oficial `dLongitud` suma 28.502 km.
 

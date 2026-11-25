@@ -1,6 +1,6 @@
 # Rutas de Transporte Terrestre de Mercancías (Perú)
 
-**Status (2026-11-24): grafo vial construido y validado (notebooks 01 y 02). Pendiente: modelo de costo (03) y comparación de rutas (04).**
+**Status (2026-11-25): grafo vial construido y validado (notebooks 01 y 02). Siguiente: cargar el dataset de emergencias viales del MTC y ubicarlo en el grafo (03).**
 
 ## Estado actual
 
@@ -8,10 +8,11 @@
 |---|---|---|
 | `01_download_and_load` | Corrido | `bronze_red_vial_2016` (3.750 tramos, 150 rutas), `bronze_peajes_2024_2025` (233 filas = 78 peajes × 3 cortes), `bronze_source_files` |
 | `02_build_road_graph` | Corrido | `silver_graph_nodes`, `silver_graph_edges`, `silver_graph_components`, `silver_graph_tolerance_sensitivity`, `silver_graph_route_validation`, `silver_graph_self_loops`, `silver_graph_geometry_fixes` |
-| `03_cost_model` | Por construir | — |
-| `04_route_and_compare` | Por construir | — |
+| `03_emergencies_on_graph` | Por construir | — |
+| `04_cost_model` | Por construir | — |
+| `05_routes_and_resilience` | Por construir | — |
 
-Dato clave para 03: **el GeoJSON de peajes no trae tarifas**; hay que sacarlas de otra fuente (OSITRAN / Provías, ver fuentes 5).
+Dato clave para 04: **el GeoJSON de peajes no trae tarifas**; hay que sacarlas de otra fuente (OSITRAN / Provías, ver fuente 5).
 
 Archivos base en el volumen `workspace.rutas_transporte.raw_data` (subidos desde el navegador: la descarga por script devolvía HTTP 418 del WAF del portal).
 
@@ -46,37 +47,56 @@ Otros totales, para no confundir: `bronze_red_vial_2016.length_km_geodesic` suma
 
 ## El objetivo
 
-Entre dos puntos cualquiera de Perú, encontrar la ruta terrestre de **menor costo real** para transportar mercancía, no la de menor distancia. Distancia y costo no son lo mismo en un país con la geografía de Perú: una ruta más corta por sierra puede salir más cara en combustible y tiempo que una ruta más larga mayormente pavimentada de costa, y los peajes cambian el cálculo según el tramo exacto elegido.
+**Reducir lo que cuestan al Perú las interrupciones de carreteras por lluvias, huaicos e inundaciones, como las del Fenómeno El Niño.** Cuando un tramo se cae, la carga espera o se desvía, y ambas cosas cuestan dinero: combustible, horas de camión, peajes adicionales, mercancía perecible que se pierde.
 
-No es un problema de la ruta más corta (eso es geometría de grafos sin más). Es un problema de **costo mínimo sobre un grafo con pesos reales**, donde el peso de cada arista combina distancia, tipo de superficie, peaje y combustible — ahí es donde entra un modelo real, no solo correr Dijkstra sobre distancia.
+El proyecto responde tres preguntas, en este orden:
+
+1. **¿Qué tramos de la red vial nacional se interrumpen y con qué frecuencia?** A partir de los reportes oficiales de emergencias del MTC, ubicados sobre el grafo de la red.
+2. **Entre dos puntos, ¿cuál es la ruta de menor costo esperado?** Costo esperado = combustible + peajes + tiempo + el costo probable de quedar detenido o desviado en tramos con historial de interrupciones. No es la ruta más corta: en Perú, una ruta más corta por sierra o por un valle propenso a huaicos puede salir más cara que una más larga y estable.
+3. **Si un tramo crítico se corta, ¿cuál es la mejor alternativa y cuánto más cuesta?** Y, a la inversa: ¿qué tramos, al caerse, encarecen más el transporte o dejan zonas aisladas? Esos son los tramos donde la prevención o una ruta alterna preparada rinde más.
+
+Uso previsto: apoyo a la decisión para transportistas, generadores de carga y entidades que planifican la respuesta (rutas alternas, priorización de mantenimiento preventivo). No es un sistema de alerta en tiempo real.
+
+### Límites que hay que decir desde ya
+
+- El archivo de emergencias publicado cubre **01.01 al 20.08.2026** (temporada de lluvias 2026). No incluye El Niño costero 2017 ni 2023. Con un solo periodo no se puede separar el efecto de El Niño del de una temporada de lluvias normal; el resultado será "tramos que se interrumpen en temporada de lluvias", no "tramos afectados por El Niño", salvo que se consigan periodos anteriores.
+- La geometría de la red es de 2016. Rutas o variantes construidas después no están en el grafo.
+- No se inventan cifras de costo: cada componente sale de un dato publicado (precios OSINERGMIN, peajes, reportes MTC) o se declara como supuesto, con sensibilidad.
 
 ## Fuentes de datos reales (verificadas en el catálogo del portal de datos abiertos de Perú)
 
-Todas confirmadas como datasets reales y descargables durante la construcción de [`pnda-catalog-inventory`](../pnda-catalog-inventory/). Nombres exactos tal como aparecen en el portal:
+Nombres exactos tal como aparecen en [datosabiertos.gob.pe](https://www.datosabiertos.gob.pe), tomados de `workspace.pnda_catalog.bronze_pnda_catalogo` (construido en [`pnda-catalog-inventory`](../pnda-catalog-inventory/)).
 
-1. **"MTC - DATOS ESPACIALES DE LA RED VIAL NACIONAL (2016)"** (MTC) — ZIP, probablemente shapefile con la geometría real de la red vial nacional.
-2. **"Red vial nacional del Sistema Nacional de Carreteras 2022 a 2025"** (MTC) — CSV/DOCX/XLSX, datos tabulares de la red vial actualizados.
-3. **"Infraestructura vial del Sistema Nacional de Carreteras por tipo de superficie, según departamento, 2022"** (MTC) — CSV, tipo de superficie por tramo/departamento.
-4. **"MTC - DATOS ESPACIALES - PEAJES (2014)"** (ZIP) y **"Unidades de Peaje de la Red Vial Nacional 2024 – 2025"** (MTC, GEOJSON + PDF) — ubicación real de las unidades de peaje.
-5. **"Recaudación en Soles - CARRETERAS"** (OSITRAN) y **"Recaudación de Unidades de Peaje a cargo de Provías Nacional"** (Provías Nacional) — tarifas/recaudación real por peaje.
-6. **"Lista de Precios de combustibles, diaria"** (OSINERGMIN) — precio real y diario de combustibles, por región.
-7. Opcional para una capa de riesgo: **"Accidentes de Tránsito - CARRETERAS"** (OSITRAN y SUTRAN por separado), **"Emergencias en la Red Vial Nacional"** (MTC).
-8. Contexto/validación: **"Transporte Terrestre de Carga Nacional 2022-2025"** (MTC) y **"Parque vehicular habilitado para el Transporte Terrestre de Carga Internacional 2023-2025"** (MTC).
+**Núcleo**
+
+1. **"MTC - DATOS ESPACIALES DE LA RED VIAL NACIONAL (2016)"** (MTC) — shapefile. **Cargado** (`bronze_red_vial_2016`).
+2. **"Unidades de Peaje de la Red Vial Nacional 2024 – 2025"** (MTC, GeoJSON + PDF). **Cargado** (`bronze_peajes_2024_2025`). Sin tarifas.
+3. **"Emergencias en la Red Vial Nacional"** (MTC-COES) — CSV `3. Reporte Emergencias 01.01 al 20.08.2026 COES-MTC.csv` + diccionario XLSX + metadatos PDF; actualizado 2026-08-25. Según el portal trae: tipo de peligro que causa la afectación, ruta, tramo, sector, estado de la transitabilidad, administrador de la vía, departamento/provincia/distrito y coordenadas decimales. **Pendiente de descargar** y confirmar columnas reales contra el diccionario.
+4. **"Lista de Precios de combustibles, diaria"** (OSINERGMIN) — precio de combustible por región.
+5. **"Recaudación en Soles - CARRETERAS"** (OSITRAN) y **"Recaudación de Unidades de Peaje a cargo de Provías Nacional"** (Provías Nacional) — para obtener tarifas, que el GeoJSON de peajes no trae.
+
+**Apoyo y validación**
+
+6. **"Infraestructura vial del Sistema Nacional de Carreteras por tipo de superficie, según departamento, 2022"** y **"Red vial nacional del Sistema Nacional de Carreteras 2022 a 2025"** (MTC) — superficie y red actualizada.
+7. **"Llamadas de Emergencia - CARRETERAS"** (OSITRAN) — llamadas por periodo en vías concesionadas; posible contraste de frecuencia.
+8. **"Accidentes de Tránsito - CARRETERAS"** (OSITRAN, SUTRAN) — riesgo de accidente por tramo (secundario frente a interrupciones).
+9. **"Intervenciones período de lluvias 2015-2016 y Fenómeno El Niño"** (MEF) — gasto público en emergencias 2015-2016. Solo contexto de magnitud; no confirmado que esté georreferenciado.
+10. **"Transporte Terrestre de Carga Nacional 2022-2025"** (MTC) — volumen de carga, para pesar qué rutas importan más.
 
 ## Enfoque técnico
 
-1. **Grafo de la red vial**: cargar la geometría de la red vial nacional con `geopandas`, construir un grafo navegable (nodos = intersecciones/puntos de la vía, aristas = tramos) con `networkx`. Si el shapefile del MTC viene con huecos (rutas no conectadas entre sí), documentarlo como limitación real, no forzar conectividad donde no la hay.
-2. **Peso de cada arista** (el costo real del tramo), combinando: distancia × tiempo estimado según tipo de superficie, consumo de combustible estimado × precio vigente en la región, y peaje si el tramo pasa por una unidad de peaje (join espacial contra el GeoJSON de peajes).
-3. **Selección de ruta**: algoritmo de camino de costo mínimo (Dijkstra o A*) sobre el grafo con esos pesos.
-4. **Dónde entra el aprendizaje automático, específicamente**: el consumo de combustible por tramo no es un número fijo conocido, hay que estimarlo. Un modelo de regresión (Gradient Boosting o similar) entrenado sobre tipo de superficie, pendiente/elevación del tramo, y velocidad promedio, para predecir consumo real por km, en vez de asumir un factor constante. Esto es lo que separa este proyecto de un simple algoritmo de grafos: el costo de cada arista es una predicción, no un dato fijo.
-5. **Salida**: dados origen y destino, la ruta de menor costo total (soles), con el desglose: km recorridos, costo estimado de combustible, costo de peajes, tiempo estimado — comparada contra la ruta de menor distancia simple, para evidenciar que no son la misma ruta.
+1. **Grafo de la red vial** (hecho, 02): nodos = intersecciones, aristas = tramos con longitud geodésica y atributos MTC.
+2. **Emergencias sobre el grafo** (03): cada evento se ubica en la arista más cercana de **su misma ruta** (coordenadas + código de ruta), con distancia de ajuste registrada y descartes reportados. Por arista: número de eventos, tipo de peligro, estado de transitabilidad (interrumpida / restringida) y, si el dato existe, duración. De ahí sale una frecuencia de interrupción por tramo en temporada de lluvias.
+3. **Costo de cada arista** (04): combustible (consumo estimado × precio regional), peaje, tiempo según superficie, y **costo esperado de interrupción** = probabilidad de interrupción × costo de espera o desvío. El consumo por km se modela (regresión sobre superficie, pendiente y velocidad) en vez de usar un factor fijo; todo supuesto va con análisis de sensibilidad.
+4. **Rutas y resiliencia** (05): ruta de menor costo esperado vs ruta más corta para pares origen-destino de carga real; luego, cortar uno por uno los tramos con más emergencias y medir el sobrecosto de la mejor alternativa o si el destino queda aislado. Salida: ranking de tramos críticos con su sobrecosto y su ruta alterna.
 
 ## Método (notebooks, en orden)
 
-1. `01_download_and_load` — descarga y carga los datasets de MTC/OSITRAN/OSINERGMIN como tablas Delta, siguiendo el mismo patrón de verificación de API que los demás proyectos de este repositorio.
-2. `02_build_road_graph` — construye el grafo navegable de la red vial nacional a partir del shapefile.
-3. `03_cost_model` — entrena el modelo de consumo de combustible por tramo y calcula el peso real de cada arista.
-4. `04_route_and_compare` — calcula la ruta de menor costo entre dos puntos de ejemplo y la compara contra la ruta de menor distancia simple.
+1. `01_download_and_load` — carga red vial 2016 y peajes 2024-2025 a bronze. **Hecho.**
+2. `02_build_road_graph` — grafo navegable, correcciones de geometría, validación vs km oficial. **Hecho.**
+3. `03_emergencies_on_graph` — carga el reporte de emergencias MTC-COES y lo ubica sobre las aristas del grafo.
+4. `04_cost_model` — costo de cada arista: combustible, peaje, tiempo y costo esperado de interrupción.
+5. `05_routes_and_resilience` — rutas de menor costo esperado, escenarios de corte de tramos críticos y ranking de tramos.
 
 ## Files
 
